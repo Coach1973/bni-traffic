@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>商務引薦燈號表 (BNI同步最終版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 核心運算：處理 Excel 樣式與匯出 -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx-js-style@1.2.0/dist/xlsx.min.js"></script>
+    <!-- 圖表顯示 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f3f4f6; }
+        .drag-area { border: 2px dashed #cbd5e1; transition: all 0.3s; }
+        .drag-area.active { border-color: #3b82f6; background-color: #eff6ff; }
+        
+        .traffic-light-svg { filter: drop-shadow(0 4px 6px rgba(0,0,0,0.3)); }
+        
+        /* 標籤樣式 */
+        .suggestion-tag { font-size: 0.75rem; background-color: #fff7ed; color: #c2410c; border: 1px solid #ffedd5; padding: 2px 6px; border-radius: 4px; display: inline-block; margin-bottom: 2px; }
+        .levelup-tag { font-size: 0.8rem; background-color: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; padding: 3px 8px; border-radius: 4px; display: block; margin-bottom: 4px; font-weight: bold; width: fit-content; }
+        .praise-tag { font-size: 0.8rem; background-color: #f0fdf4; color: #15803d; border: 1px solid #bbf7d0; padding: 3px 8px; border-radius: 4px; display: block; margin-bottom: 4px; font-weight: bold; width: fit-content; }
+
+        /* 動畫 */
+        @keyframes blink-glow {
+            0%, 100% { opacity: 1; filter: drop-shadow(0 0 5px currentColor); }
+            50% { opacity: 0.7; filter: drop-shadow(0 0 1px currentColor); }
+        }
+        .light-flash { animation: blink-glow 1.5s infinite ease-in-out; }
+    </style>
+</head>
+<body class="p-6">
+
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <div class="bg-white rounded-xl shadow-sm p-6 mb-6">
+            <div class="flex flex-col md:flex-row justify-between items-start md:items-center">
+                <div>
+                    <h1 class="text-4xl font-extrabold text-red-700 mb-2">商務引薦燈號表 <span class="text-sm bg-green-100 text-green-700 px-2 py-1 rounded ml-2 align-middle border border-green-200">BNI 官方同步版</span></h1>
+                    <h2 class="text-2xl font-bold text-gray-800 mb-2">🚥 會員戰力計算器 v3.1</h2>
+                    <p class="text-gray-600">自動偵測每位會員的「實際在籍週數」，確保分數與 BNI Connect 報表一致。</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Upload Area -->
+        <div class="bg-white rounded-xl shadow-sm p-8 mb-6 text-center">
+            <div id="drop-zone" class="drag-area rounded-lg p-10 cursor-pointer">
+                <div class="mb-4">
+                    <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
+                        <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                    </svg>
+                </div>
+                <p class="text-lg text-gray-700 font-medium mb-1">點擊上傳 或 將檔案拖曳至此</p>
+                <p class="text-sm text-gray-500">請上傳 BNI Connect 下載的 PALMS 摘要報告 (.xlsx)</p>
+                <input type="file" id="fileInput" class="hidden" accept=".csv, .xlsx, .xls">
+            </div>
+            <div id="error-msg" class="hidden mt-4 p-3 bg-red-100 text-red-700 rounded-lg text-sm text-left whitespace-pre-line"></div>
+        </div>
+
+        <!-- Results Area -->
+        <div id="result-area" class="hidden">
+            <!-- 統計圖表區塊 -->
+            <div class="bg-white rounded-xl shadow-sm p-6 mb-6">
+                <h3 id="analysis-header" class="text-xl font-bold text-gray-800 mb-4 border-b pb-2">📊 分會戰力分析</h3>
+                <div class="flex flex-col md:flex-row items-center justify-around gap-8">
+                    <!-- 圖表 -->
+                    <div class="w-64 h-64 relative">
+                        <canvas id="trafficChart"></canvas>
+                    </div>
+                    <!-- 統計數據文字 -->
+                    <div class="flex-1 w-full max-w-md">
+                        <div class="grid grid-cols-2 gap-4" id="stats-container"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-xl font-bold text-gray-800">計算結果 (已依分數排序)</h2>
+                <div class="flex gap-2">
+                    <span class="bg-gray-100 text-gray-600 px-3 py-2 rounded-lg text-sm font-medium">共 <span id="total-members">0</span> 位會員</span>
+                    <button onclick="exportToExcel()" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd" />
+                        </svg>
+                        匯出報表 (Excel)
+                    </button>
+                </div>
+            </div>
+            
+            <div class="bg-white rounded-xl shadow-sm overflow-hidden overflow-x-auto">
+                <table class="w-full text-sm text-left text-gray-600">
+                    <thead class="text-xs text-gray-700 uppercase bg-gray-100 border-b">
+                        <tr>
+                            <th class="px-4 py-3 text-center w-12 bg-gray-100 sticky left-0 z-20 border-r">#</th>
+                            <th class="px-4 py-3 sticky left-12 bg-gray-100 z-10 w-24">姓名</th>
+                            <th class="px-4 py-3 text-center w-12">週數</th>
+                            <th class="px-4 py-3 text-center w-20">總分</th>
+                            <th class="px-4 py-3 text-center w-28">燈號</th>
+                            <th class="px-4 py-3 text-left w-64 text-orange-600">💪 重點衝刺建議 (依實際週數計算)</th>
+                            <th class="px-4 py-3 text-center border-l">缺席<br><span class="text-xs text-gray-400">次數(分)</span></th>
+                            <th class="px-4 py-3 text-center border-l">引薦<br><span class="text-xs text-gray-400">平均(分)</span></th>
+                            <th class="px-4 py-3 text-center border-l">1-to-1<br><span class="text-xs text-gray-400">平均(分)</span></th>
+                            <th class="px-4 py-3 text-center border-l">培訓<br><span class="text-xs text-gray-400">學分(分)</span></th>
+                            <th class="px-4 py-3 text-center border-l">來賓<br><span class="text-xs text-gray-400">4週(分)</span></th>
+                            <th class="px-4 py-3 text-center border-l">金額<br><span class="text-xs text-gray-400">萬(分)</span></th>
+                        </tr>
+                    </thead>
+                    <tbody id="table-body"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // 1. 變數與工具函式
+        // ==========================================
+        let calculatedData = []; 
+        let trafficChart = null; 
+        let currentBranchName = ""; 
+
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('fileInput');
+        const resultArea = document.getElementById('result-area');
+        const tableBody = document.getElementById('table-body');
+        const errorMsg = document.getElementById('error-msg');
+        const totalMembersSpan = document.getElementById('total-members');
+        const analysisHeader = document.getElementById('analysis-header');
+
+        function showError(msg) {
+            errorMsg.textContent = msg;
+            errorMsg.classList.remove('hidden');
+            resultArea.classList.add('hidden');
+        }
+
+        function cleanNumber(val) {
+            if (val === undefined || val === null || val === '') return 0;
+            if (typeof val === 'number') return val;
+            const num = parseFloat(val.toString().replace(/,/g, ''));
+            return isNaN(num) ? 0 : num;
+        }
+
+        function getTrafficLightSVG(status) {
+            const colors = {
+                green: '#22c55e', yellow: '#eab308', red: '#ef4444', off: '#374151'
+            };
+            const activeColor = colors[status] || colors.off;
+            const glowClass = (status !== 'grey') ? 'light-flash' : '';
+            
+            const gFill = (status === 'green') ? colors.green : colors.off;
+            const yFill = (status === 'yellow') ? colors.yellow : colors.off;
+            const rFill = (status === 'red') ? colors.red : colors.off;
+
+            const gStyle = (status === 'green') ? `filter: drop-shadow(0 0 8px ${colors.green});` : '';
+            const yStyle = (status === 'yellow') ? `filter: drop-shadow(0 0 8px ${colors.yellow});` : '';
+            const rStyle = (status === 'red') ? `filter: drop-shadow(0 0 8px ${colors.red});` : '';
+
+            return `
+            <svg width="40" height="90" viewBox="0 0 30 70" fill="none" class="mx-auto traffic-light-svg">
+                <rect width="30" height="70" rx="10" fill="#1f2937" stroke="#111827" stroke-width="2"/>
+                <circle cx="15" cy="15" r="8" fill="${gFill}" style="${gStyle}" class="${status === 'green' ? glowClass : ''}"/>
+                <circle cx="15" cy="35" r="8" fill="${yFill}" style="${yStyle}" class="${status === 'yellow' ? glowClass : ''}"/>
+                <circle cx="15" cy="55" r="8" fill="${rFill}" style="${rStyle}" class="${status === 'red' ? glowClass : ''}"/>
+            </svg>`;
+        }
+
+        // ==========================================
+        // 2. 邏輯運算 (BNI 官方邏輯)
+        // ==========================================
+        function getSuggestions(details, totalScore) {
+            let suggestions = [];
+            // 計算時使用的週數
+            const weeks = details.weeks; 
+
+            // 0. 燈號提示
+            if (totalScore < 70) {
+                let target = 0;
+                let nextLightName = '';
+                if (totalScore < 30) { target = 30; nextLightName = '紅燈'; } 
+                else if (totalScore < 50) { target = 50; nextLightName = '黃燈'; } 
+                else { target = 70; nextLightName = '綠燈'; }
+
+                const diff = target - totalScore;
+                suggestions.push({ type: 'levelup', text: `🔥 差 ${diff} 分上${nextLightName}加油！` });
+            } else {
+                let praiseMsg = '';
+                if (totalScore >= 100) praiseMsg = '完美';
+                else if (totalScore >= 95) praiseMsg = '卓越';
+                else if (totalScore >= 90) praiseMsg = '典範';
+                else if (totalScore >= 85) praiseMsg = '傑出';
+                else if (totalScore >= 80) praiseMsg = '優秀';
+                else if (totalScore >= 75) praiseMsg = '太棒了！';
+                else praiseMsg = '綠燈了！';
+                suggestions.push({ type: 'praise', text: `✨ ${praiseMsg}` });
+            }
+            
+            // 1. 引薦 (目標: 1.5/週 = 20分, 1.2/週 = 15分...)
+            const refScore = details.scoreReferral;
+            if (refScore < 20) {
+                let nextTargetAvg = 0;
+                if (refScore === 15) nextTargetAvg = 1.5; // 15分想變20分 (需 >= 1.5)
+                else if (refScore === 10) nextTargetAvg = 1.2; // 10分想變15分
+                else if (refScore === 5) nextTargetAvg = 1.0; // 5分想變10分
+                else nextTargetAvg = 0.75; // 0分想變5分
+
+                // 所需總張數 = 目標平均 * 實際週數
+                const targetTotal = Math.ceil(nextTargetAvg * weeks);
+                const gap = targetTotal - details.rawReferrals;
+                
+                if (gap > 0) suggestions.push({ type: 'normal', text: `差 <b>${gap}</b> 張引薦` });
+            }
+
+            // 2. 一對一 (目標: 2/週 = 15分, 1/週 = 10分...)
+            const score1to1 = details.score1to1;
+            if (score1to1 < 15) {
+                let nextTargetAvg = 0;
+                if (score1to1 === 10) nextTargetAvg = 2.0; // 2 or more
+                else if (score1to1 === 5) nextTargetAvg = 1.0; // 1 or more
+                else nextTargetAvg = 0.5;
+
+                const targetTotal = Math.ceil(nextTargetAvg * weeks);
+                const gap = targetTotal - details.raw1to1;
+                
+                if (gap > 0) suggestions.push({ type: 'normal', text: `差 <b>${gap}</b> 次 1-1` });
+            }
+
+            // 3. 培訓 (絕對值)
+            const scoreCEU = details.scoreCEU;
+            if (scoreCEU < 15) {
+                let target = (scoreCEU === 10) ? 6 : (scoreCEU === 5 ? 4 : 2);
+                let gap = target - details.ceu;
+                if (gap > 0) suggestions.push({ type: 'normal', text: `差 <b>${gap}</b> 學分` });
+            }
+
+            // 4. 來賓 (目標: 2位/4週 = 15分, 1位/4週 = 10分)
+            const scoreVisitors = details.scoreVisitors;
+            if (scoreVisitors < 15) {
+                // 公式: (總來賓 / 週數) * 4 >= 2
+                // 所以: 總來賓 >= (2 * 週數) / 4 = 0.5 * 週數
+                let nextTargetPer4Weeks = (scoreVisitors === 10) ? 2 : 1;
+                let targetTotal = Math.ceil((nextTargetPer4Weeks * weeks) / 4);
+                let gap = targetTotal - details.rawVisitors;
+                
+                if (gap > 0) suggestions.push({ type: 'normal', text: `差 <b>${gap}</b> 位來賓` });
+            }
+
+            // 5. 金額 (絕對值)
+            const scoreMoney = details.scoreMoney;
+            if (scoreMoney < 15) {
+                let target = (scoreMoney === 10) ? 2000001 : (scoreMoney === 5 ? 800000 : 400000);
+                let gap = target - details.rawAmount;
+                if (gap > 0) suggestions.push({ type: 'normal', text: `差 <b>${(gap/10000).toFixed(0)}</b> 萬` });
+            }
+
+            return suggestions;
+        }
+
+        function calculateScore(row) {
+            const getValue = (key) => {
+                if (row[key] !== undefined) return cleanNumber(row[key]);
+                const keyTrimmed = key.trim();
+                for (let k in row) {
+                    if (k.trim() === keyTrimmed) return cleanNumber(row[k]);
+                }
+                return 0;
+            };
+
+            // 1. 動態計算週數 (核心修正)
+            // 公式：出席 + 缺席 + 遲到 + 替代人 = 該會員在這段期間的應出席次數 (即週數)
+            let dynamicWeeks = getValue('出席') + getValue('缺席') + getValue('遲到') + getValue('替代人');
+            
+            // 安全防護
+            if (dynamicWeeks === 0) dynamicWeeks = 1;
+
+            const absences = getValue('缺席');
+            let scoreAttendance = 0;
+            if (absences === 0) scoreAttendance = 20;
+            else if (absences === 1) scoreAttendance = 15;
+            else if (absences === 2) scoreAttendance = 10;
+            
+            const internal = getValue('提供內部引薦');
+            const external = getValue('提供外部引薦');
+            const rawReferrals = internal + external;
+            const avgReferral = rawReferrals / dynamicWeeks;
+            
+            let scoreReferral = 0;
+            if (avgReferral >= 1.5) scoreReferral = 20;
+            else if (avgReferral >= 1.2) scoreReferral = 15;
+            else if (avgReferral >= 1.0) scoreReferral = 10;
+            else if (avgReferral >= 0.75) scoreReferral = 5;
+
+            const oneToOne = getValue('一對一會面');
+            const avg1to1 = oneToOne / dynamicWeeks;
+            let score1to1 = 0;
+            if (avg1to1 >= 2) score1to1 = 15; // 修正為 >= 2
+            else if (avg1to1 >= 1) score1to1 = 10;
+            else if (avg1to1 >= 0.5) score1to1 = 5;
+
+            const ceu = getValue('分會教育單位');
+            let scoreCEU = 0;
+            if (ceu >= 6) scoreCEU = 15;
+            else if (ceu >= 4) scoreCEU = 10;
+            else if (ceu >= 2) scoreCEU = 5;
+
+            const visitors = getValue('來賓');
+            const visitorsPer4Weeks = (visitors / dynamicWeeks) * 4;
+            let scoreVisitors = 0;
+            if (visitorsPer4Weeks >= 2) scoreVisitors = 15;
+            else if (visitorsPer4Weeks >= 1) scoreVisitors = 10;
+
+            const amount = getValue('交易價值');
+            let scoreMoney = 0;
+            if (amount >= 2000000) scoreMoney = 15;
+            else if (amount >= 800000) scoreMoney = 10;
+            else if (amount >= 400000) scoreMoney = 5;
+
+            const total = scoreAttendance + scoreReferral + score1to1 + scoreCEU + scoreVisitors + scoreMoney;
+            
+            let status = 'grey';
+            let lightText = '灰燈';
+            if (total >= 70) { status = 'green'; lightText = '綠燈'; }
+            else if (total >= 50) { status = 'yellow'; lightText = '黃燈'; }
+            else if (total >= 30) { status = 'red'; lightText = '紅燈'; }
+
+            // 姓名處理
+            let lastName = row['姓氏'] || '';
+            let firstName = row['名字'] || '';
+            if (!lastName) { for (let k in row) if (k.trim() === '姓氏') lastName = row[k]; }
+            if (!firstName) { for (let k in row) if (k.trim() === '名字') firstName = row[k]; }
+
+            const details = {
+                weeks: dynamicWeeks, // 儲存實際週數
+                absences, scoreAttendance,
+                rawReferrals, avgReferral: avgReferral.toFixed(2), scoreReferral,
+                raw1to1: oneToOne, avg1to1: avg1to1.toFixed(2), score1to1,
+                ceu, scoreCEU,
+                rawVisitors: visitors, visitorsPer4Weeks: visitorsPer4Weeks.toFixed(2), scoreVisitors,
+                rawAmount: amount, amount: (amount/10000).toFixed(0), scoreMoney
+            };
+
+            return {
+                name: (lastName + firstName) || '未知姓名',
+                total,
+                status,
+                lightText,
+                details: details,
+                suggestions: getSuggestions(details, total)
+            };
+        }
+
+        // ==========================================
+        // 3. 渲染與匯出
+        // ==========================================
+        function renderChart(data) {
+            const counts = { green: 0, yellow: 0, red: 0, grey: 0 };
+            data.forEach(d => counts[d.status]++);
+            
+            const total = data.length;
+            totalMembersSpan.textContent = total;
+
+            const percentages = {
+                green: total ? Math.round((counts.green / total) * 100) : 0,
+                yellow: total ? Math.round((counts.yellow / total) * 100) : 0,
+                red: total ? Math.round((counts.red / total) * 100) : 0,
+                grey: total ? Math.round((counts.grey / total) * 100) : 0
+            };
+
+            const statsContainer = document.getElementById('stats-container');
+            statsContainer.innerHTML = `
+                <div class="bg-green-50 p-3 rounded-lg border border-green-200">
+                    <div class="text-green-800 font-bold text-lg">🟢 綠燈</div>
+                    <div class="text-2xl font-extrabold text-green-600">${counts.green} 人 <span class="text-sm text-green-500 font-normal">(${percentages.green}%)</span></div>
+                </div>
+                <div class="bg-yellow-50 p-3 rounded-lg border border-yellow-200">
+                    <div class="text-yellow-800 font-bold text-lg">🟡 黃燈</div>
+                    <div class="text-2xl font-extrabold text-yellow-600">${counts.yellow} 人 <span class="text-sm text-yellow-500 font-normal">(${percentages.yellow}%)</span></div>
+                </div>
+                <div class="bg-red-50 p-3 rounded-lg border border-red-200">
+                    <div class="text-red-800 font-bold text-lg">🔴 紅燈</div>
+                    <div class="text-2xl font-extrabold text-red-600">${counts.red} 人 <span class="text-sm text-red-500 font-normal">(${percentages.red}%)</span></div>
+                </div>
+                <div class="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                    <div class="text-gray-800 font-bold text-lg">⚫ 灰燈</div>
+                    <div class="text-2xl font-extrabold text-gray-600">${counts.grey} 人 <span class="text-sm text-gray-500 font-normal">(${percentages.grey}%)</span></div>
+                </div>
+            `;
+
+            const ctx = document.getElementById('trafficChart').getContext('2d');
+            if (trafficChart) trafficChart.destroy();
+
+            trafficChart = new Chart(ctx, {
+                type: 'doughnut',
+                data: {
+                    labels: ['綠燈', '黃燈', '紅燈', '灰燈'],
+                    datasets: [{
+                        data: [counts.green, counts.yellow, counts.red, counts.grey],
+                        backgroundColor: ['#22c55e', '#eab308', '#ef4444', '#6b7280'],
+                        borderWidth: 0,
+                        hoverOffset: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false } },
+                    cutout: '60%'
+                }
+            });
+        }
+
+        function processData(data) {
+            tableBody.innerHTML = '';
+            calculatedData = [];
+
+            const validRows = data.filter(row => {
+                let lastName = row['姓氏'] || '';
+                let firstName = row['名字'] || '';
+                if (!lastName) { for (let k in row) if (k.trim() === '姓氏') lastName = row[k]; }
+                if (!firstName) { for (let k in row) if (k.trim() === '名字') firstName = row[k]; }
+                
+                const fullName = String(lastName || '').trim() + String(firstName || '').trim();
+                if (!fullName) return false;
+
+                const excludeKeywords = ['來賓', 'BNI', '總數', 'Total'];
+                for (const keyword of excludeKeywords) {
+                    if (fullName.includes(keyword)) return false;
+                }
+                return true;
+            });
+
+            if (validRows.length === 0) {
+                showError("找不到有效的會員資料。");
+                return;
+            }
+
+            validRows.forEach(row => calculatedData.push(calculateScore(row)));
+            calculatedData.sort((a, b) => b.total - a.total);
+
+            renderChart(calculatedData);
+
+            calculatedData.forEach((result, index) => {
+                const tr = document.createElement('tr');
+                tr.className = "bg-white border-b hover:bg-gray-50";
+                
+                let suggestionHTML = '';
+                if (result.suggestions.length > 0) {
+                    suggestionHTML = result.suggestions.map((s, idx) => {
+                        if (s.type === 'levelup') return `<span class="levelup-tag">${s.text}</span>`;
+                        if (s.type === 'praise') return `<span class="praise-tag">${s.text}</span>`;
+                        if (idx < 4) return `<span class="suggestion-tag">${s.text}</span>`;
+                        return '';
+                    }).join(' ');
+                } else {
+                    suggestionHTML = '<span class="text-green-500 text-xs font-bold">表現優異!</span>';
+                }
+
+                // 在表格中增加「週數」欄位，方便核對
+                tr.innerHTML = `
+                    <th class="px-4 py-3 text-center text-gray-500 bg-white sticky left-0 z-20 border-r border-gray-100">${index + 1}</th>
+                    <th scope="row" class="px-4 py-3 font-medium text-gray-900 sticky left-12 bg-white whitespace-nowrap z-10">${result.name}</th>
+                    <td class="px-4 py-3 text-center text-xs text-gray-400">${result.details.weeks}</td>
+                    <td class="px-4 py-3 text-center text-lg font-bold text-gray-800">${result.total}</td>
+                    <td class="px-4 py-3 text-center">${getTrafficLightSVG(result.status)}</td>
+                    <td class="px-4 py-3 text-left">${suggestionHTML}</td>
+                    
+                    <td class="px-4 py-3 text-center text-gray-500 border-l">${result.details.absences}次 <span class="font-bold text-blue-600">(${result.details.scoreAttendance})</span></td>
+                    <td class="px-4 py-3 text-center text-gray-500 border-l">${result.details.avgReferral} <span class="font-bold text-blue-600">(${result.details.scoreReferral})</span></td>
+                    <td class="px-4 py-3 text-center text-gray-500 border-l">${result.details.avg1to1} <span class="font-bold text-blue-600">(${result.details.score1to1})</span></td>
+                    <td class="px-4 py-3 text-center text-gray-500 border-l">${result.details.ceu} <span class="font-bold text-blue-600">(${result.details.scoreCEU})</span></td>
+                    <td class="px-4 py-3 text-center text-gray-500 border-l">${result.details.visitorsPer4Weeks} <span class="font-bold text-blue-600">(${result.details.scoreVisitors})</span></td>
+                    <td class="px-4 py-3 text-center text-gray-500 border-l">${result.details.amount}萬 <span class="font-bold text-blue-600">(${result.details.scoreMoney})</span></td>
+                `;
+                tableBody.appendChild(tr);
+            });
+
+            resultArea.classList.remove('hidden');
+        }
+
+        function exportToExcel() {
+            if (!calculatedData.length) return;
+
+            const total = calculatedData.length;
+            const counts = { green: 0, yellow: 0, red: 0, grey: 0 };
+            calculatedData.forEach(d => counts[d.status]++);
+            const percs = {
+                green: total ? Math.round((counts.green / total) * 100) : 0,
+                yellow: total ? Math.round((counts.yellow / total) * 100) : 0,
+                red: total ? Math.round((counts.red / total) * 100) : 0,
+                grey: total ? Math.round((counts.grey / total) * 100) : 0
+            };
+
+            const wb = XLSX.utils.book_new();
+            const ws_data = [];
+
+            ws_data.push([`商務引薦燈號表 ${currentBranchName || '分會'} 戰力成績單`]);
+            ws_data.push([
+                `綠燈: ${counts.green}人 (${percs.green}%)  |  黃燈: ${counts.yellow}人 (${percs.yellow}%)  |  紅燈: ${counts.red}人 (${percs.red}%)  |  灰燈: ${counts.grey}人 (${percs.grey}%)`
+            ]);
+            ws_data.push([]); 
+
+            const headers = [
+                "編號", "姓名", "週數", "總分", "燈號",
+                "缺席", "得分", 
+                "引薦", "得分", 
+                "1-to-1", "得分", 
+                "培訓", "得分", 
+                "來賓", "得分", 
+                "金額(萬)", "得分"
+            ];
+            ws_data.push(headers);
+
+            calculatedData.forEach((d, index) => {
+                const row = [
+                    index + 1,
+                    d.name,
+                    d.details.weeks,
+                    d.total,
+                    d.lightText, 
+                    d.details.absences, d.details.scoreAttendance,
+                    d.details.avgReferral, d.details.scoreReferral,
+                    d.details.avg1to1, d.details.score1to1,
+                    d.details.ceu, d.details.scoreCEU,
+                    d.details.visitorsPer4Weeks, d.details.scoreVisitors,
+                    d.details.amount, d.details.scoreMoney
+                ];
+                ws_data.push(row);
+            });
+
+            const ws = XLSX.utils.aoa_to_sheet(ws_data);
+
+            const range = XLSX.utils.decode_range(ws['!ref']);
+            const lastCol = 16; // 增加一欄週數
+
+            if(!ws['!merges']) ws['!merges'] = [];
+            ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: lastCol } });
+            ws['!merges'].push({ s: { r: 1, c: 0 }, e: { r: 1, c: lastCol } });
+
+            const headerStyle = { font: { bold: true, color: { rgb: "FFFFFF" } }, fill: { fgColor: { rgb: "4B5563" } }, alignment: { horizontal: "center", vertical: "center" }, border: { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } } };
+            const cellBorder = { top: { style: "thin" }, bottom: { style: "thin" }, left: { style: "thin" }, right: { style: "thin" } };
+            const colorMap = { '綠燈': { bg: '22C55E', fg: 'FFFFFF' }, '黃燈': { bg: 'EAB308', fg: '000000' }, '紅燈': { bg: 'EF4444', fg: 'FFFFFF' }, '灰燈': { bg: '6B7280', fg: 'FFFFFF' } };
+
+            for (let R = range.s.r; R <= range.e.r; ++R) {
+                for (let C = range.s.c; C <= range.e.c; ++C) {
+                    const cellRef = XLSX.utils.encode_cell({ c: C, r: R });
+                    if (!ws[cellRef]) ws[cellRef] = { v: "", t: "s" };
+
+                    if (R === 0) {
+                        ws[cellRef].s = {
+                            font: { sz: 18, bold: true, color: { rgb: "FFFFFF" } },
+                            fill: { fgColor: { rgb: "B91C1C" } },
+                            alignment: { horizontal: "left", vertical: "center", indent: 1 } 
+                        };
+                    } else if (R === 1) {
+                        ws[cellRef].s = {
+                            font: { sz: 12, bold: true },
+                            alignment: { horizontal: "left", vertical: "center", indent: 1 }, 
+                            fill: { fgColor: { rgb: "F3F4F6" } }
+                        };
+                    } else if (R === 3) {
+                        ws[cellRef].s = headerStyle;
+                    } else if (R > 3) {
+                        ws[cellRef].s = { border: cellBorder, alignment: { vertical: "center", horizontal: "center" } };
+                        if (C === 1) ws[cellRef].s.alignment.horizontal = "left"; 
+                        if (C === 4) {
+                            const val = ws[cellRef].v;
+                            if (colorMap[val]) {
+                                ws[cellRef].s.fill = { fgColor: { rgb: colorMap[val].bg } };
+                                ws[cellRef].s.font = { color: { rgb: colorMap[val].fg }, bold: true };
+                            }
+                        }
+                    }
+                }
+            }
+
+            ws['!cols'] = [
+                { wch: 6 },  // #
+                { wch: 12 }, // 姓名
+                { wch: 6 },  // 週數
+                { wch: 6 },  // 總分
+                { wch: 10 }, // 燈號
+                { wch: 6 }, { wch: 5 }, 
+                { wch: 6 }, { wch: 5 }, 
+                { wch: 6 }, { wch: 5 }, 
+                { wch: 6 }, { wch: 5 }, 
+                { wch: 6 }, { wch: 5 }, 
+                { wch: 10 }, { wch: 5 } 
+            ];
+
+            XLSX.utils.book_append_sheet(wb, ws, "燈號成績單");
+            const fileName = `商務引薦燈號表_${currentBranchName || '分會'}_戰力成績單.xlsx`;
+            XLSX.writeFile(wb, fileName);
+        }
+
+        function handleFile(file) {
+            errorMsg.classList.add('hidden');
+            const reader = new FileReader();
+            
+            reader.onload = function(e) {
+                try {
+                    const data = new Uint8Array(e.target.result);
+                    const workbook = XLSX.read(data, {type: 'array'});
+                    const firstSheetName = workbook.SheetNames[0];
+                    const worksheet = workbook.Sheets[firstSheetName];
+                    const rawData = XLSX.utils.sheet_to_json(worksheet, {header: 1});
+                    
+                    currentBranchName = "";
+                    for(let i = 0; i < Math.min(rawData.length, 20); i++) {
+                        const row = rawData[i];
+                        const rowStr = row.map(cell => String(cell || '')).join(' ');
+                        if (rowStr.includes('分會:')) {
+                            for(let j=0; j<row.length; j++) {
+                                if (String(row[j]).includes('分會:')) {
+                                    for(let k=j+1; k<row.length; k++) {
+                                        if(row[k]) {
+                                            currentBranchName = String(row[k]).trim();
+                                            break;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                        if (currentBranchName) break; 
+                    }
+                    if (!currentBranchName) currentBranchName = "分會";
+                    analysisHeader.textContent = `📊 ${currentBranchName} 戰力分析`;
+
+                    let headerRowIndex = -1;
+                    for(let i = 0; i < rawData.length; i++) {
+                        const row = rawData[i];
+                        const rowStr = row.map(cell => String(cell).trim());
+                        if (rowStr.includes('姓氏') && rowStr.includes('名字')) {
+                            headerRowIndex = i;
+                            break;
+                        }
+                    }
+
+                    if (headerRowIndex === -1) throw new Error("找不到有效的標題列 (需包含 '姓氏' 與 '名字')");
+
+                    const jsonData = XLSX.utils.sheet_to_json(worksheet, {range: headerRowIndex});
+                    if (jsonData.length === 0) throw new Error("讀取不到資料");
+
+                    processData(jsonData);
+
+                } catch (err) {
+                    console.error(err);
+                    showError("檔案解析失敗：" + err.message);
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        dropZone.addEventListener('click', () => fileInput.click());
+        dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('active'); });
+        dropZone.addEventListener('dragleave', () => dropZone.classList.remove('active'));
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('active');
+            if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+        });
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length) handleFile(e.target.files[0]);
+        });
+    </script>
+</body>
+</html>
